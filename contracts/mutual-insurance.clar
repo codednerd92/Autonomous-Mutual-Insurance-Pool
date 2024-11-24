@@ -89,3 +89,62 @@
   )
 )
 
+(define-public (submit-claim (policy-id uint) (amount uint) (description (string-utf8 500)))
+  (let
+    (
+      (claim-id (var-get next-claim-id))
+      (policy (unwrap! (map-get? policies { policy-id: policy-id }) (err err-not-found)))
+    )
+    (asserts! (is-eq (get owner policy) tx-sender) (err err-unauthorized))
+    (asserts! (get is-active policy) (err err-invalid-policy))
+    (asserts! (<= block-height (get end-block policy)) (err err-invalid-policy))
+    (asserts! (<= amount (get coverage-amount policy)) (err err-invalid-policy))
+    (map-set claims
+      { claim-id: claim-id }
+      {
+        policy-id: policy-id,
+        amount: amount,
+        description: description,
+        is-approved: false
+      }
+    )
+    (var-set next-claim-id (+ claim-id u1))
+    (ok claim-id)
+  )
+)
+
+(define-public (approve-claim (claim-id uint))
+  (let
+    (
+      (claim (unwrap! (map-get? claims { claim-id: claim-id }) (err err-not-found)))
+      (policy (unwrap! (map-get? policies { policy-id: (get policy-id claim) }) (err err-not-found)))
+    )
+    (asserts! (is-owner) (err err-owner-only))
+    (asserts! (not (get is-approved claim)) (err err-already-exists))
+    (asserts! (<= (get amount claim) (var-get pool-balance)) (err err-insufficient-funds))
+    (match (as-contract (stx-transfer? (get amount claim) tx-sender (get owner policy)))
+      success
+        (begin
+          (var-set pool-balance (- (var-get pool-balance) (get amount claim)))
+          (map-set claims { claim-id: claim-id }
+            (merge claim { is-approved: true })
+          )
+          (ok true)
+        )
+      error (err err-insufficient-funds)
+    )
+  )
+)
+
+(define-read-only (get-policy (policy-id uint))
+  (map-get? policies { policy-id: policy-id })
+)
+
+(define-read-only (get-claim (claim-id uint))
+  (map-get? claims { claim-id: claim-id })
+)
+
+(define-read-only (get-pool-balance)
+  (var-get pool-balance)
+)
+
